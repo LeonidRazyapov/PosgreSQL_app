@@ -1,0 +1,259 @@
+import tkinter as tk
+from tkinter import messagebox, filedialog, simpledialog
+import psycopg2
+import subprocess
+import os
+import json
+
+CONFIG_FILE = 'config.json'
+
+
+class PostgreSQLApp:
+    def __init__(self, master):
+        self.master = master
+        self.master.title("PostgreSQL Manager")
+        self.master.geometry("600x600")
+
+        self.load_config()
+        self.create_widgets()
+
+    def create_widgets(self):
+        self.credentials_frame = tk.Frame(self.master)
+        self.credentials_frame.pack(pady=10)
+
+        tk.Label(self.credentials_frame, text="User:").grid(row=0, column=0, padx=5)
+        self.user_entry = tk.Entry(self.credentials_frame)
+        self.user_entry.grid(row=0, column=1, padx=5)
+        self.user_entry.insert(0, self.config.get('user', ''))
+
+        tk.Label(self.credentials_frame, text="Password:").grid(row=1, column=0, padx=5)
+        self.password_entry = tk.Entry(self.credentials_frame, show="*")
+        self.password_entry.grid(row=1, column=1, padx=5)
+
+        tk.Label(self.credentials_frame, text="Host:").grid(row=2, column=0, padx=5)
+        self.host_entry = tk.Entry(self.credentials_frame)
+        self.host_entry.grid(row=2, column=1, padx=5)
+        self.host_entry.insert(0, self.config.get('host', ''))
+
+        tk.Label(self.credentials_frame, text="Port:").grid(row=3, column=0, padx=5)
+        self.port_entry = tk.Entry(self.credentials_frame)
+        self.port_entry.grid(row=3, column=1, padx=5)
+        self.port_entry.insert(0, self.config.get('port', ''))
+
+        self.connect_button = tk.Button(self.credentials_frame, text="Connect", command=self.update_database_list)
+        self.connect_button.grid(row=4, columnspan=2, pady=5)
+
+        self.operation_frame = tk.Frame(self.master)
+        self.operation_frame.pack(pady=10)
+
+        self.backup_button = tk.Button(self.operation_frame, text="Создать бэкап", command=self.create_backup)
+        self.backup_button.grid(row=0, column=0, padx=5)
+
+        self.restore_button = tk.Button(self.operation_frame, text="Загрузить бэкап", command=self.restore_backup)
+        self.restore_button.grid(row=0, column=1, padx=5)
+
+        self.create_db_button = tk.Button(self.operation_frame, text="Создать базу", command=self.create_database)
+        self.create_db_button.grid(row=0, column=2, padx=5)
+
+        self.delete_db_button = tk.Button(self.operation_frame, text="Удалить базу", command=self.delete_database)
+        self.delete_db_button.grid(row=0, column=3, padx=5)
+
+        self.database_list_label = tk.Label(self.master, text="Выберите базу данных:")
+        self.database_list_label.pack(pady=10)
+
+        self.database_listbox = tk.Listbox(self.master)
+        self.database_listbox.pack(pady=10, fill=tk.X, padx=10)
+
+        self.log_text = tk.Text(self.master, height=10)
+        self.log_text.pack(pady=10, fill=tk.BOTH, padx=10)
+
+    def save_config(self):
+        self.config['user'] = self.user_entry.get()
+        self.config['host'] = self.host_entry.get()
+        self.config['port'] = self.port_entry.get()
+        with open(CONFIG_FILE, 'w') as config_file:
+            json.dump(self.config, config_file)
+
+    def load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r') as config_file:
+                self.config = json.load(config_file)
+        else:
+            self.config = {}
+
+    def update_database_list(self):
+        user = self.user_entry.get()
+        password = self.password_entry.get()
+        host = self.host_entry.get()
+        port = self.port_entry.get()
+
+        if not (user and password and host and port):
+            messagebox.showerror("Ошибка", "Пожалуйста, заполните все поля учетных данных.")
+            return
+
+        self.save_config()
+
+        try:
+            connection = psycopg2.connect(user=user,
+                                          password=password,
+                                          host=host,
+                                          port=port,
+                                          database="postgres")
+            cursor = connection.cursor()
+            cursor.execute("SELECT datname FROM pg_database WHERE datistemplate = false;")
+            databases = cursor.fetchall()
+            self.database_listbox.delete(0, tk.END)
+            for db in databases:
+                self.database_listbox.insert(tk.END, db[0])
+            cursor.close()
+            connection.close()
+            self.log_text.insert(tk.END, "Подключение успешно. Список баз данных обновлен.\n")
+        except Exception as e:
+            self.log_text.insert(tk.END, f"Ошибка подключения: {str(e)}\n")
+
+    def create_backup(self):
+        selected_db = self.database_listbox.get(tk.ACTIVE)
+        if not selected_db:
+            messagebox.showerror("Ошибка", "Пожалуйста, выберите базу данных.")
+            return
+
+        user = self.user_entry.get()
+        password = self.password_entry.get()
+        host = self.host_entry.get()
+        port = self.port_entry.get()
+
+        try:
+            backup_file = filedialog.asksaveasfilename(defaultextension=".backup",
+                                                       filetypes=[("Backup files", "*.backup"), ("All files", "*.*")])
+            if not backup_file:
+                return
+
+            pg_dump_path = r"C:\Program Files\PostgreSQL\16\bin\pg_dump.exe"
+            env = os.environ.copy()
+            env['PGPASSWORD'] = password
+
+            command = [
+                pg_dump_path, '-U', user, '-h', host, '-p', port, '-F', 'c', '-f', backup_file, selected_db
+            ]
+
+            result = subprocess.run(command, env=env, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                self.log_text.insert(tk.END, f"Backup created for database {selected_db} at {backup_file}\n")
+            else:
+                self.log_text.insert(tk.END, f"Error creating backup: {result.stderr}\n")
+
+        except FileNotFoundError:
+            self.log_text.insert(tk.END, "Error: pg_dump not found. Ensure PostgreSQL bin directory is in PATH.\n")
+        except Exception as e:
+            self.log_text.insert(tk.END, f"Error creating backup: {str(e)}\n")
+
+    def restore_backup(self):
+        selected_db = self.database_listbox.get(tk.ACTIVE)
+        if not selected_db:
+            messagebox.showerror("Ошибка", "Пожалуйста, выберите базу данных.")
+            return
+
+        user = self.user_entry.get()
+        password = self.password_entry.get()
+        host = self.host_entry.get()
+        port = self.port_entry.get()
+
+        try:
+            backup_file = filedialog.askopenfilename(defaultextension=".backup",
+                                                     filetypes=[("Backup files", "*.backup"), ("SQL files", "*.sql"),
+                                                                ("All files", "*.*")])
+            if not backup_file:
+                return
+
+            env = os.environ.copy()
+            env['PGPASSWORD'] = password
+
+            if backup_file.endswith('.sql'):
+                psql_path = r"C:\Program Files\PostgreSQL\16\bin\psql.exe"
+                command = [
+                    psql_path, '-U', user, '-h', host, '-p', port, '-d', selected_db, '-f', backup_file
+                ]
+            else:
+                pg_restore_path = r"C:\Program Files\PostgreSQL\16\bin\pg_restore.exe"
+                command = [
+                    pg_restore_path, '-U', user, '-h', host, '-p', port, '-d', selected_db, '-1', backup_file
+                ]
+
+            result = subprocess.run(command, env=env, capture_output=True, text=True)
+
+            if result.returncode == 0:
+                self.log_text.insert(tk.END, f"Backup restored for database {selected_db} from {backup_file}\n")
+            else:
+                self.log_text.insert(tk.END, f"Error restoring backup: {result.stderr}\n")
+
+        except FileNotFoundError:
+            self.log_text.insert(tk.END,
+                                 "Error: psql or pg_restore not found. Ensure PostgreSQL bin directory is in PATH.\n")
+        except Exception as e:
+            self.log_text.insert(tk.END, f"Error restoring backup: {str(e)}\n")
+
+    def create_database(self):
+        user = self.user_entry.get()
+        password = self.password_entry.get()
+        host = self.host_entry.get()
+        port = self.port_entry.get()
+
+        db_name = simpledialog.askstring("Создать базу данных", "Введите имя новой базы данных:")
+
+        if not db_name:
+            return
+
+        try:
+            connection = psycopg2.connect(user=user,
+                                          password=password,
+                                          host=host,
+                                          port=port,
+                                          database="postgres")
+            connection.autocommit = True
+            cursor = connection.cursor()
+            cursor.execute(f"CREATE DATABASE {db_name}")
+            cursor.close()
+            connection.close()
+            self.update_database_list()
+            self.log_text.insert(tk.END, f"База данных '{db_name}' успешно создана.\n")
+        except Exception as e:
+            self.log_text.insert(tk.END, f"Ошибка при создании базы данных: {str(e)}\n")
+
+    def delete_database(self):
+        user = self.user_entry.get()
+        password = self.password_entry.get()
+        host = self.host_entry.get()
+        port = self.port_entry.get()
+
+        selected_db = self.database_listbox.get(tk.ACTIVE)
+        if not selected_db:
+            messagebox.showerror("Ошибка", "Пожалуйста, выберите базу данных.")
+            return
+
+        confirm = messagebox.askyesno("Удалить базу данных",
+                                      f"Вы уверены, что хотите удалить базу данных '{selected_db}'?")
+        if not confirm:
+            return
+
+        try:
+            connection = psycopg2.connect(user=user,
+                                          password=password,
+                                          host=host,
+                                          port=port,
+                                          database="postgres")
+            connection.autocommit = True
+            cursor = connection.cursor()
+            cursor.execute(f"DROP DATABASE {selected_db}")
+            cursor.close()
+            connection.close()
+            self.update_database_list()
+            self.log_text.insert(tk.END, f"База данных '{selected_db}' успешно удалена.\n")
+        except Exception as e:
+            self.log_text.insert(tk.END, f"Ошибка при удалении базы данных: {str(e)}\n")
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = PostgreSQLApp(root)
+    root.mainloop()
